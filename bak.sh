@@ -7,6 +7,7 @@ echo "1.压缩"
 echo "2.复制"
 echo "3.快速复制public_html"
 echo "4.数据库备份"
+echo "5.退出"
 
 read anum
 case $anum in
@@ -25,6 +26,9 @@ case $anum in
     4)
     echo "当前操作模式为:备份数据库"
     oargs="bkdb"
+    ;;
+    5)
+    exit
     ;;
     *)
     echo "无匹配模式,退出"
