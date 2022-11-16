@@ -2,7 +2,9 @@
 
 cd $(pwd)
 
-echo "请选择需要操作的模式:"
+echo "该备份脚本仅对CyberPanel友好,使用其它面板的朋友请下载后自行修改"
+echo "Update time:2022-11-16 Author: Mr.D Version: 1.0"
+echo "请输入需要操作的模式数字后回车:"
 echo "1.压缩"
 echo "2.复制"
 echo "3.快速复制public_html"
