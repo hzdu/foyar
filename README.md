@@ -1,3 +1,45 @@
 bak.sh
-服务器备份脚本
+CyberPanel备份脚本
+
+```php
 wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/bak.sh && chmod +x bak.sh && sudo ./bak.sh
+```
+
+
+
+CyberPanel清理脚本
+
+```php
+wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/cleancyberpanel.sh && chmod +x cleancyberpanel.sh && sudo ./cleancyberpanel.sh
+```
+
+
+
+CloudPanel清理脚本
+
+```php
+wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/cleancloudpanel.sh && chmod +x cleancloudpanel.sh && sudo ./cleancloudpanel.sh
+```
+
+
+
+CyberPanel一键安装脚本
+
+```php
+wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/cyberpanel-installer.sh && chmod +x cyberpanel-installer.sh && sudo ./cyberpanel-installer.sh
+```
+
+
+
+Miniconda一键安装脚本
+
+```php
+wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/miniconda.sh && chmod +x miniconda.sh && sudo ./miniconda.sh
+```
+
+
+
+
+
+
+
