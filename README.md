@@ -1,4 +1,3 @@
-bak.sh
 CyberPanel备份脚本
 
 ```php
@@ -19,14 +18,6 @@ CloudPanel清理脚本
 
 ```php
 wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/cleancloudpanel.sh && chmod +x cleancloudpanel.sh && sudo ./cleancloudpanel.sh
-```
-
-
-
-CyberPanel一键安装脚本(root用户登录)
-
-```php
-wget https://raw.githubusercontent.com/hzdu/foyar/main/cyberpanel-installer.sh && chmod +x cyberpanel-installer.sh && ./cyberpanel-installer.sh
 ```
 
 
