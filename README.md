@@ -17,7 +17,7 @@ wget https://cdn.jsdelivr.net/gh/hzdu/foyar@master/cleancyberpanel.sh && chmod +
 CyberPanel一键安装脚本
 
 ```php
-wget https://raw.githubusercontent.com/hzdu/foyar/main/install_cyberpanel.sh && chmod +x install_cyberpanel.sh && ./cleancloudpanel.sh
+wget https://raw.githubusercontent.com/hzdu/foyar/main/install_cyberpanel.sh && chmod +x install_cyberpanel.sh && ./install_cyberpanel.sh
 ```
 
 
