@@ -2,8 +2,8 @@
 
 # 1. 禁用交互式提示（避免 apt upgrade 弹出粉红色的 Grub/SSHD 确认框）
 export DEBIAN_FRONTEND=noninteractive
-sudo -E apt update
-sudo -E apt upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+apt update
+apt upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
 
 # 2. 生成一个16位的安全随机密码 (仅包含大小写字母和数字，避免特殊符号导致面板Bug)
 ADMIN_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
@@ -31,6 +31,8 @@ echo -e "=================================================================\n"
 wget -O cyberpanel.sh "https://cyberpanel.sh/?dl"
 chmod +x cyberpanel.sh
 
-# 6. 启动无人值守安装
-# 传入 --version ols 选项和我们刚刚自己生成的 --password 密码，即可跳过所有互动按键
-sudo ./cyberpanel.sh --version ols --password "${ADMIN_PASS}"
+# 6. 清除可能残留的 SUDO 环境变量，避免官方脚本误判
+unset SUDO_USER SUDO_UID SUDO_GID
+
+# 7. 启动无人值守安装（直接以 root 运行，不再使用 sudo）
+./cyberpanel.sh --version ols --password "${ADMIN_PASS}"
