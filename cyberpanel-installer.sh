@@ -1,62 +1,98 @@
 #!/bin/bash
 
-# 0. 自动清除 sudo 环境变量 (防止误加 sudo 执行时触发 CyberPanel 的 SUDO 报错)
-unset SUDO_USER SUDO_COMMAND SUDO_UID SUDO_GID
+# =========================================================
+# CyberPanel Expect 全自动安装脚本
+# (含 16位面板随机密码 + 自动读取数据库 root 密码)
+# =========================================================
 
-# 检查是否为 root 用户
-if [ "$EUID" -ne 0 ]; then
-  echo -e "\033[31m[错误] 请先执行 sudo su - 切换到 root 用户再运行！\033[0m"
-  exit 1
+# 1. 检测并安装必要依赖工具 (expect, curl, wget, coreutils)
+echo ">>> 正在检测并安装必要的依赖工具..."
+if [ -f /etc/debian_version ]; then
+    apt-get update -y && apt-get install -y expect curl wget coreutils
+elif [ -f /etc/redhat-release ]; then
+    yum install -y expect curl wget coreutils
 fi
 
-# 1. 禁用交互式提示（避免 apt upgrade 弹出粉红色的配置确认框）
-export DEBIAN_FRONTEND=noninteractive
-apt update
-apt upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+# 2. 生成 16 位安全随机面板密码 (仅包含大小写字母和数字)
+ADMIN_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
 
-# 2. 生成一个16位的安全随机面板管理员密码 (仅包含大小写字母和数字)
-ADMIN_PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
+echo "========================================================="
+echo " [提示] 本次自动生成的面板 admin 密码为: $ADMIN_PASS"
+echo " (开始进行全自动安装，请稍等...)"
+echo "========================================================="
+sleep 2
 
-# 3. 获取服务器的公网 IP (用于在文本中显示后台登录地址)
-SERVER_IP=$(curl -s -m 5 ifconfig.me || curl -s -m 5 icanhazip.com || echo "你的服务器IP")
+# 3. 使用 expect 自动应答 CyberPanel 官方安装程序
+expect <<EOF
+set timeout -1
+spawn sh -c "curl https://cyberpanel.net/install.sh | sh"
 
-# 4. 提前将后台账号、密码信息保存到 /root/info.txt 文件中
-INFO_FILE="/root/info.txt"
+# 1. 选择安装 CyberPanel
+expect "*enter the number*"
+send "1\r"
 
-cat <<EOF > $INFO_FILE
-==================================================
-        CyberPanel 自动化安装成功记录
-==================================================
-后台登录地址: https://${SERVER_IP}:8090
-管理员用户名: admin
-管理员密  码: ${ADMIN_PASS}
-==================================================
+# 2. 选择 OpenLiteSpeed 免费版
+expect "*enter the number*"
+send "1\r"
+
+# 3. 是否安装全套服务 (PowerDNS, Postfix, Pure-FTPd) [Y/n]
+expect "*Full installation*"
+send "Y\r"
+
+# 4. 是否使用远程 MySQL [y/N]
+expect "*Remote MySQL*"
+send "N\r"
+
+# 5. 安装 CyberPanel 版本 (按 Enter 键选择最新版本)
+expect "*Press Enter key*"
+send "\r"
+
+# 6. 选择密码设置模式 [d/r/s] (选择 s 自定义密码)
+expect "*Choose*"
+send "s\r"
+
+# 7. 输入刚生成的 16 位随机密码
+expect "*Please enter custom password*"
+send "${ADMIN_PASS}\r"
+
+# 8. 是否安装 Memcached [Y/n]
+expect "*Memcached*"
+send "Y\r"
+
+# 9. 是否安装 Redis [Y/n]
+expect "*Redis*"
+send "Y\r"
+
+# 10. 是否安装 WatchDog 监控 [Y/n]
+expect "*WatchDog*"
+send "Y\r"
+
+expect eof
 EOF
 
-echo -e "\n================================================================="
-echo -e "\033[32m [成功] 管理员账号和密码已提前保存到 /root/info.txt \033[0m"
-echo -e "=================================================================\n"
+# 4. 获取服务器 IP 和数据库 root 密码
+SERVER_IP=$(curl -s https://api.ipify.org || echo "你的服务器IP")
 
-# 5. 下载真正的 CyberPanel 安装脚本
-wget -O cyberpanel.sh "https://cyberpanel.sh/?dl"
-chmod +x cyberpanel.sh
-
-# 6. 启动无人值守安装
-./cyberpanel.sh --version ols --password "${ADMIN_PASS}"
-
-# 7.【新增】安装完成后，自动读取 MySQL 根密码并追加保存到 info.txt 末尾
+# CyberPanel 默认将 MySQL root 密码存在 /etc/cyberpanel/mysqlPassword
 if [ -f /etc/cyberpanel/mysqlPassword ]; then
-    MYSQL_PASS=$(cat /etc/cyberpanel/mysqlPassword)
-    cat <<EOF >> $INFO_FILE
-
-数据库 (MySQL) Root 密码: ${MYSQL_PASS}
-==================================================
-EOF
-    echo -e "\n\033[32m [成功] 已自动读取 MySQL 密码并追加写到 /root/info.txt！ \033[0m\n"
+    MYSQL_ROOT_PASS=$(cat /etc/cyberpanel/mysqlPassword)
+elif [ -f /root/.my.cnf ]; then
+    MYSQL_ROOT_PASS=$(grep -i 'password' /root/.my.cnf | cut -d'=' -f2 | tr -d ' "'"'")
 else
-    echo -e "\n\033[31m [警告] 未能找到 /etc/cyberpanel/mysqlPassword 文件 \033[0m\n"
+    MYSQL_ROOT_PASS="读取失败（请手动执行 cat /etc/cyberpanel/mysqlPassword 查看）"
 fi
 
-# 8. 最后在控制台打出完整凭据
-echo -e "\033[36m>>> 以下是你的完整登录信息 (/root/info.txt)： <<<\033[0m"
-cat $INFO_FILE
+# 5. 格式化输出安装结果汇总
+echo ""
+echo "========================================================="
+echo "  🎉 CyberPanel 自动安装完成！"
+echo "========================================================="
+echo "  【面板登录信息】"
+echo "  面板地址      : https://${SERVER_IP}:8090"
+echo "  管理员账号    : admin"
+echo "  管理员密码    : ${ADMIN_PASS}"
+echo ""
+echo "  【数据库 root 信息】"
+echo "  MySQL Root账号: root"
+echo "  MySQL Root密码: ${MYSQL_ROOT_PASS}"
+echo "========================================================="
