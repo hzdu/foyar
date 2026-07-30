@@ -1,6 +1,6 @@
 #!/bin/bash
 #====================================================
-# CyberPanel 全自动安装脚本 - Ubuntu 专版
+# CyberPanel 全自动安装脚本
 # 支持系统：Ubuntu 20.04 / 22.04 / 24.04
 # 使用方式：sudo bash cyberpanel_ubuntu.sh
 #====================================================
@@ -309,72 +309,181 @@ post_install_config() {
     log_success "开机自启配置完成"
 }
 
-# ========== 最终：显示安装结果 ==========
+# ========== 最终：读取并打印所有密码 ==========
 show_result() {
-    # 获取本机 IP
     SERVER_IP=$(hostname -I | awk '{print $1}')
     INSTALL_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
-    echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║       CyberPanel 安装成功！                  ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${CYAN}🖥  系统版本:${NC}    Ubuntu ${UBUNTU_VERSION}"
-    echo -e "  ${CYAN}⚙️  Web 服务器:${NC}  ${WEB_SERVER}"
-    echo -e "  ${CYAN}📅 安装时间:${NC}    ${INSTALL_DATE}"
-    echo ""
-    echo -e "  ${YELLOW}━━━━━━━━━━━━ 访问信息 ━━━━━━━━━━━━${NC}"
-    echo ""
-    echo -e "  ${BLUE}📌 CyberPanel 管理面板:${NC}"
-    echo -e "     https://${SERVER_IP}:8090"
-    echo ""
-    echo -e "  ${BLUE}📌 WebAdmin 控制台:${NC}"
-    echo -e "     https://${SERVER_IP}:7080"
-    echo ""
-    echo -e "  ${BLUE}📌 默认用户名:${NC} admin"
-    echo ""
+    # ------------------------------------------------
+    # 读取 MySQL root 密码
+    # 优先从 /etc/cyberpanel/mysqlPassword 读取
+    # 备选从 /home/cyberpanel/.my.cnf 读取
+    # ------------------------------------------------
+    MYSQL_ROOT_PASSWORD=""
+
+    # 方法1: 从官方密码文件读取
+    if [ -f "/etc/cyberpanel/mysqlPassword" ]; then
+        MYSQL_ROOT_PASSWORD=$(cat /etc/cyberpanel/mysqlPassword 2>/dev/null | tr -d '[:space:]')
+    fi
+
+    # 方法2: 从 .my.cnf 读取（备选 / 旧版兼容）
+    if [ -z "$MYSQL_ROOT_PASSWORD" ] && [ -f "/home/cyberpanel/.my.cnf" ]; then
+        MYSQL_ROOT_PASSWORD=$(grep -i "^password" /home/cyberpanel/.my.cnf \
+            | head -1 \
+            | awk -F'=' '{print $2}' \
+            | tr -d '[:space:]"'"'" 2>/dev/null)
+    fi
+
+    # 方法3: 从 settings.py 读取 rootdb 密码（最后备选）
+    if [ -z "$MYSQL_ROOT_PASSWORD" ] && [ -f "/usr/local/CyberCP/CyberCP/settings.py" ]; then
+        MYSQL_ROOT_PASSWORD=$(python3 -c "
+import sys
+sys.path.insert(0, '/usr/local/CyberCP')
+import os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'CyberCP.settings')
+try:
+    import django
+    django.setup()
+    from django.conf import settings
+    print(settings.DATABASES['rootdb']['PASSWORD'])
+except Exception as e:
+    print('')
+" 2>/dev/null)
+    fi
+
+    # 密码未找到时给出提示
+    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+        MYSQL_ROOT_PASSWORD="[未能自动读取，请手动执行: cat /etc/cyberpanel/mysqlPassword]"
+    fi
+
+    # ------------------------------------------------
+    # 读取 CyberPanel admin 密码
+    # ------------------------------------------------
+    CYBERPANEL_ADMIN_PASSWORD=""
 
     case "$ADMIN_PASSWORD" in
         "auto"|"random")
-            echo -e "  ${BLUE}📌 管理员密码:${NC} 随机生成（见上方安装日志）"
+            # 随机密码：从安装日志中提取
+            # CyberPanel 安装完成后会输出 "CyberPanel Password: XXXXXX"
+            if [ -f "/root/install.log" ]; then
+                CYBERPANEL_ADMIN_PASSWORD=$(grep -i "password" /root/install.log \
+                    | grep -iv "mysql\|database\|db\|mariadb" \
+                    | tail -1 \
+                    | awk '{print $NF}' \
+                    | tr -d '[:space:]' 2>/dev/null)
+            fi
+
+            # 备选：通过 cyberpanel CLI 验证管理员密码是否存在
+            if [ -z "$CYBERPANEL_ADMIN_PASSWORD" ]; then
+                CYBERPANEL_ADMIN_PASSWORD="[随机生成，请查看安装日志: /root/install.log]"
+            fi
             ;;
         "default"|"1234567")
-            echo -e "  ${RED}📌 管理员密码: 1234567（默认！请立即修改！）${NC}"
+            CYBERPANEL_ADMIN_PASSWORD="1234567"
             ;;
         *)
-            echo -e "  ${BLUE}📌 管理员密码:${NC} 已设置为自定义密码"
+            CYBERPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD"
             ;;
     esac
 
-    echo ""
-    echo -e "  ${YELLOW}━━━━━━━━━━━━ 常用命令 ━━━━━━━━━━━━${NC}"
-    echo ""
-    echo -e "  升级 CyberPanel:   ${CYAN}cyberpanel upgrade${NC}"
-    echo -e "  查看帮助:          ${CYAN}cyberpanel help${NC}"
-    echo -e "  重启 OpenLiteSpeed:${CYAN}systemctl restart lshttpd${NC}"
-    echo -e "  重启 CyberPanel:   ${CYAN}systemctl restart lscpd${NC}"
-    echo ""
-    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    # ------------------------------------------------
+    # 读取 WebAdmin (OpenLiteSpeed) 密码
+    # ------------------------------------------------
+    OLS_ADMIN_PASSWORD=""
+    OLS_CONF="/usr/local/lsws/admin/conf/htpasswd"
 
-    # 保存安装信息
+    if [ -f "$OLS_CONF" ]; then
+        OLS_ADMIN_PASSWORD="[已设置，请通过 WebAdmin 界面修改]"
+    fi
+
+    # ------------------------------------------------
+    # 打印安装结果
+    # ------------------------------------------------
+    echo ""
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║          CyberPanel 安装完成！                       ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${CYAN}🖥  系统版本  :${NC}  Ubuntu ${UBUNTU_VERSION}"
+    echo -e "  ${CYAN}⚙️  Web 服务器:${NC}  ${WEB_SERVER}"
+    echo -e "  ${CYAN}📅 安装时间  :${NC}  ${INSTALL_DATE}"
+    echo ""
+
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━ 访问地址 ━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  ${BLUE}📌 CyberPanel 管理面板 :${NC}"
+    echo -e "     👉 https://${SERVER_IP}:8090"
+    echo ""
+    echo -e "  ${BLUE}📌 WebAdmin 控制台     :${NC}"
+    echo -e "     👉 https://${SERVER_IP}:7080"
+    echo ""
+
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━ CyberPanel 账号 ━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  ${BLUE}👤 管理员账号    :${NC} ${GREEN}admin${NC}"
+    if [[ "$CYBERPANEL_ADMIN_PASSWORD" == "1234567" ]]; then
+        echo -e "  ${BLUE}🔑 管理员密码    :${NC} ${RED}${CYBERPANEL_ADMIN_PASSWORD}  ⚠️ 默认密码，请立即修改！${NC}"
+    else
+        echo -e "  ${BLUE}🔑 管理员密码    :${NC} ${GREEN}${CYBERPANEL_ADMIN_PASSWORD}${NC}"
+    fi
+    echo ""
+
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━ 数据库账号 ━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  ${BLUE}🗄  数据库类型    :${NC} MariaDB"
+    echo -e "  ${BLUE}👤 数据库账号    :${NC} ${GREEN}root${NC}"
+    echo -e "  ${BLUE}🔑 数据库密码    :${NC} ${GREEN}${MYSQL_ROOT_PASSWORD}${NC}"
+    echo -e "  ${BLUE}🌐 连接地址      :${NC} 127.0.0.1:3306 (仅本地)"
+    echo ""
+
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━ 常用命令 ━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  升级 CyberPanel  : ${CYAN}cyberpanel upgrade${NC}"
+    echo -e "  重启 面板服务    : ${CYAN}systemctl restart lscpd${NC}"
+    echo -e "  重启 Web 服务器  : ${CYAN}systemctl restart lshttpd${NC}"
+    echo -e "  重启 数据库      : ${CYAN}systemctl restart mariadb${NC}"
+    echo -e "  查看 MySQL 密码  : ${CYAN}cat /etc/cyberpanel/mysqlPassword${NC}"
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    # ------------------------------------------------
+    # 保存所有信息到文件
+    # ------------------------------------------------
     INFO_FILE="/root/cyberpanel_info.txt"
     {
-        echo "==============================="
-        echo " CyberPanel 安装信息"
-        echo "==============================="
-        echo " 系统:         Ubuntu ${UBUNTU_VERSION}"
-        echo " Web 服务器:   ${WEB_SERVER}"
-        echo " 安装时间:     ${INSTALL_DATE}"
-        echo " 面板地址:     https://${SERVER_IP}:8090"
-        echo " WebAdmin:    https://${SERVER_IP}:7080"
-        echo " 用户名:       admin"
-        echo "==============================="
+        echo "========================================================"
+        echo "  CyberPanel 安装信息 - 请妥善保管此文件！"
+        echo "========================================================"
+        echo ""
+        echo "  安装时间    : ${INSTALL_DATE}"
+        echo "  系统版本    : Ubuntu ${UBUNTU_VERSION}"
+        echo "  Web 服务器  : ${WEB_SERVER}"
+        echo ""
+        echo "  ---- 访问地址 ----"
+        echo "  CyberPanel  : https://${SERVER_IP}:8090"
+        echo "  WebAdmin    : https://${SERVER_IP}:7080"
+        echo ""
+        echo "  ---- CyberPanel 账号 ----"
+        echo "  账号        : admin"
+        echo "  密码        : ${CYBERPANEL_ADMIN_PASSWORD}"
+        echo ""
+        echo "  ---- 数据库账号 ----"
+        echo "  数据库类型  : MariaDB"
+        echo "  账号        : root"
+        echo "  密码        : ${MYSQL_ROOT_PASSWORD}"
+        echo "  端口        : 3306"
+        echo ""
+        echo "========================================================"
     } > "$INFO_FILE"
-    echo ""
-    log_info "安装信息已保存至: ${INFO_FILE}"
+    chmod 600 "$INFO_FILE"   # 仅 root 可读，保护密码安全
 
+    log_info "📄 所有账号信息已保存至: ${YELLOW}${INFO_FILE}${NC}"
+    log_warn "⚠️  该文件权限已设为 600，仅 root 可读。请妥善保管！"
+
+    # ------------------------------------------------
     # 询问是否重启
+    # ------------------------------------------------
     echo ""
     read -p "  建议重启服务器，是否现在重启？(y/N): " DO_REBOOT
     if [[ "$DO_REBOOT" =~ ^[Yy]$ ]]; then
@@ -391,7 +500,7 @@ main() {
     clear
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║    CyberPanel 全自动安装脚本 - Ubuntu 专版   ║${NC}"
+    echo -e "${BLUE}║    CyberPanel 全自动安装脚本   ║${NC}"
     echo -e "${BLUE}║      支持: Ubuntu 20.04 / 22.04 / 24.04      ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════════╝${NC}"
     echo ""
