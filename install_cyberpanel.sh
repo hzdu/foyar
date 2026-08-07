@@ -1,6 +1,6 @@
 #!/bin/bash
 #====================================================
-# CyberPanel 全自动安装脚本
+# CyberPanel 全自动安装脚本 - Ubuntu 专版
 # 支持系统：Ubuntu 20.04 / 22.04 / 24.04
 # 使用方式：sudo bash cyberpanel_ubuntu.sh
 #====================================================
@@ -133,7 +133,7 @@ configure_firewall() {
         UFW_STATUS=$(ufw status | head -1)
         if echo "$UFW_STATUS" | grep -q "active"; then
             log_info "UFW 已启用，开放必要端口..."
-            ufw allow 8090/tcp comment 'CyberPanel'   # CyberPanel 管理面板
+            ufw allow 8090/tcp comment 'CyberPanel'
             ufw allow 80/tcp   comment 'HTTP'
             ufw allow 443/tcp  comment 'HTTPS'
             ufw allow 21/tcp   comment 'FTP'
@@ -155,7 +155,7 @@ configure_firewall() {
     fi
 }
 
-# ========== 第六步：更新系统（按版本区分） ==========
+# ========== 第六步：更新系统 ==========
 update_system() {
     log_step "更新 Ubuntu ${UBUNTU_VERSION} 系统包..."
 
@@ -163,7 +163,7 @@ update_system() {
 
     apt-get update -y
 
-    # Ubuntu 24.04 使用更严格的升级方式
+    # Ubuntu 24.04 使用更严格的升级方式，避免交互式弹窗
     if [[ "$UBUNTU_VERSION" == "24.04" ]]; then
         apt-get upgrade -y \
             -o Dpkg::Options::="--force-confdef" \
@@ -194,11 +194,15 @@ prepare_ubuntu_24() {
 
     log_step "Ubuntu 24.04 专项准备..."
 
-    # 安装 Python 3.10 兼容库（CyberPanel 依赖）
+    # 安装 Python 依赖
     log_info "安装 Python 依赖..."
-    apt-get install -y python3 python3-pip python3-venv python3-dev || true
+    apt-get install -y \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev || true
 
-    # 安装 libmysqlclient-dev（Ubuntu 24.04 替换了 libmariadbclient-dev）
+    # Ubuntu 24.04 中 libmariadbclient-dev 已更名为 libmysqlclient-dev
     log_info "安装数据库开发库..."
     apt-get install -y \
         libmysqlclient-dev \
@@ -291,12 +295,12 @@ post_install_config() {
 
     # 设置服务开机自启
     SERVICES=(
-        "lscpd"        # CyberPanel 主服务
-        "lshttpd"      # OpenLiteSpeed / LiteSpeed
-        "mariadb"      # 数据库
-        "named"        # PowerDNS (如已安装)
-        "postfix"      # 邮件服务 (如已安装)
-        "pure-ftpd"    # FTP 服务 (如已安装)
+        "lscpd"       # CyberPanel 主服务
+        "lshttpd"     # OpenLiteSpeed / LiteSpeed
+        "mariadb"     # 数据库
+        "named"       # PowerDNS（如已安装）
+        "postfix"     # 邮件服务（如已安装）
+        "pure-ftpd"   # FTP 服务（如已安装）
     )
 
     for SVC in "${SERVICES[@]}"; do
@@ -309,21 +313,129 @@ post_install_config() {
     log_success "开机自启配置完成"
 }
 
-# ========== 最终：读取并打印所有密码 ==========
-show_result() {
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-    INSTALL_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+# ========== 获取公网 IP ==========
+get_public_ip() {
+    log_step "获取服务器公网 IP..."
 
-    # ------------------------------------------------
-    # 读取 MySQL root 密码
-    # 优先从 /etc/cyberpanel/mysqlPassword 读取
-    # 备选从 /home/cyberpanel/.my.cnf 读取
-    # ------------------------------------------------
+    PUBLIC_IP=""
+
+    # 依次尝试多个公网 IP 查询服务，任意一个成功即停止
+    IP_SERVICES=(
+        "https://api.ipify.org"
+        "https://ifconfig.me"
+        "https://ip.sb"
+        "https://icanhazip.com"
+        "https://ipecho.net/plain"
+        "https://myexternalip.com/raw"
+    )
+
+    for SERVICE in "${IP_SERVICES[@]}"; do
+        PUBLIC_IP=$(curl -s --connect-timeout 5 --max-time 8 "$SERVICE" 2>/dev/null | tr -d '[:space:]')
+        # 校验是否符合 IPv4 格式
+        if [[ "$PUBLIC_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            log_success "公网 IP 获取成功: ${PUBLIC_IP} (来源: ${SERVICE})"
+            break
+        else
+            PUBLIC_IP=""
+        fi
+    done
+
+    # 所有服务均失败时，降级使用内网 IP
+    if [ -z "$PUBLIC_IP" ]; then
+        log_warn "无法获取公网 IP，降级使用内网 IP"
+        PUBLIC_IP=$(hostname -I | awk '{print $1}')
+        log_warn "内网 IP: ${PUBLIC_IP}（若服务器有公网 IP，请手动替换）"
+    fi
+
+    export PUBLIC_IP
+}
+
+# ========== 读取 CyberPanel 管理员密码 ==========
+get_cyberpanel_admin_password() {
+    log_step "读取 CyberPanel 管理员密码..."
+
+    CYBERPANEL_ADMIN_PASSWORD=""
+
+    case "$ADMIN_PASSWORD" in
+
+        "auto"|"random")
+            # --------------------------------------------------
+            # 方法1: 从安装日志中提取
+            # CyberPanel 安装结束时会打印:
+            #   "CyberPanel Password: XXXXXX"
+            # --------------------------------------------------
+            LOG_FILES=(
+                "/root/install.log"
+                "/root/cyberpanel_install.log"
+                "/tmp/cyberpanel_install.log"
+            )
+            for LOG in "${LOG_FILES[@]}"; do
+                if [ -f "$LOG" ]; then
+                    CYBERPANEL_ADMIN_PASSWORD=$(grep -i "CyberPanel Password" "$LOG" \
+                        | tail -1 \
+                        | sed 's/.*CyberPanel Password[[:space:]]*:[[:space:]]*//' \
+                        | tr -d '[:space:]' 2>/dev/null)
+                    if [ -n "$CYBERPANEL_ADMIN_PASSWORD" ]; then
+                        log_success "从日志文件读取密码成功: ${LOG}"
+                        break
+                    fi
+                fi
+            done
+
+            # --------------------------------------------------
+            # 方法2: 日志中未找到时，重置为新随机密码
+            # --------------------------------------------------
+            if [ -z "$CYBERPANEL_ADMIN_PASSWORD" ]; then
+                log_warn "日志中未找到密码，尝试自动重置管理员密码..."
+                NEW_PASS=$(tr -dc 'A-Za-z0-9@#$%' </dev/urandom | head -c 16)
+                python3 /usr/local/CyberCP/manage.py shell -c "
+from loginSystem.models import Administrator
+try:
+    u = Administrator.objects.get(userName='admin')
+    u.set_password('${NEW_PASS}')
+    u.save()
+    print('reset_ok')
+except Exception as e:
+    print('error: ' + str(e))
+" 2>/dev/null | grep -q "reset_ok" && CYBERPANEL_ADMIN_PASSWORD="$NEW_PASS"
+
+                if [ -n "$CYBERPANEL_ADMIN_PASSWORD" ]; then
+                    log_warn "原密码无法读取，已自动重置为新密码"
+                fi
+            fi
+
+            # --------------------------------------------------
+            # 方法3: 所有方法均失败，提示用户手动处理
+            # --------------------------------------------------
+            if [ -z "$CYBERPANEL_ADMIN_PASSWORD" ]; then
+                CYBERPANEL_ADMIN_PASSWORD="[读取失败！请手动重置: cyberpanel changeAdminPass]"
+                log_error "密码自动读取失败，请安装完成后手动重置密码"
+            fi
+            ;;
+
+        "default"|"1234567")
+            CYBERPANEL_ADMIN_PASSWORD="1234567"
+            ;;
+
+        *)
+            # 自定义密码直接使用配置的值
+            CYBERPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD"
+            ;;
+    esac
+
+    export CYBERPANEL_ADMIN_PASSWORD
+}
+
+# ========== 读取 MySQL root 密码 ==========
+get_mysql_root_password() {
+    log_step "读取 MySQL root 密码..."
+
     MYSQL_ROOT_PASSWORD=""
 
     # 方法1: 从官方密码文件读取
     if [ -f "/etc/cyberpanel/mysqlPassword" ]; then
         MYSQL_ROOT_PASSWORD=$(cat /etc/cyberpanel/mysqlPassword 2>/dev/null | tr -d '[:space:]')
+        log_success "MySQL 密码读取成功 (/etc/cyberpanel/mysqlPassword)"
     fi
 
     # 方法2: 从 .my.cnf 读取（备选 / 旧版兼容）
@@ -332,9 +444,10 @@ show_result() {
             | head -1 \
             | awk -F'=' '{print $2}' \
             | tr -d '[:space:]"'"'" 2>/dev/null)
+        log_success "MySQL 密码读取成功 (/home/cyberpanel/.my.cnf)"
     fi
 
-    # 方法3: 从 settings.py 读取 rootdb 密码（最后备选）
+    # 方法3: 从 settings.py 读取（最后备选）
     if [ -z "$MYSQL_ROOT_PASSWORD" ] && [ -f "/usr/local/CyberCP/CyberCP/settings.py" ]; then
         MYSQL_ROOT_PASSWORD=$(python3 -c "
 import sys
@@ -349,59 +462,34 @@ try:
 except Exception as e:
     print('')
 " 2>/dev/null)
+        if [ -n "$MYSQL_ROOT_PASSWORD" ]; then
+            log_success "MySQL 密码读取成功 (settings.py)"
+        fi
     fi
 
-    # 密码未找到时给出提示
     if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-        MYSQL_ROOT_PASSWORD="[未能自动读取，请手动执行: cat /etc/cyberpanel/mysqlPassword]"
+        MYSQL_ROOT_PASSWORD="[读取失败！请手动执行: cat /etc/cyberpanel/mysqlPassword]"
+        log_error "MySQL 密码自动读取失败"
     fi
 
-    # ------------------------------------------------
-    # 读取 CyberPanel admin 密码
-    # ------------------------------------------------
-    CYBERPANEL_ADMIN_PASSWORD=""
+    export MYSQL_ROOT_PASSWORD
+}
 
-    case "$ADMIN_PASSWORD" in
-        "auto"|"random")
-            # 随机密码：从安装日志中提取
-            # CyberPanel 安装完成后会输出 "CyberPanel Password: XXXXXX"
-            if [ -f "/root/install.log" ]; then
-                CYBERPANEL_ADMIN_PASSWORD=$(grep -i "password" /root/install.log \
-                    | grep -iv "mysql\|database\|db\|mariadb" \
-                    | tail -1 \
-                    | awk '{print $NF}' \
-                    | tr -d '[:space:]' 2>/dev/null)
-            fi
+# ========== 最终：打印安装结果 ==========
+show_result() {
+    INSTALL_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
-            # 备选：通过 cyberpanel CLI 验证管理员密码是否存在
-            if [ -z "$CYBERPANEL_ADMIN_PASSWORD" ]; then
-                CYBERPANEL_ADMIN_PASSWORD="[随机生成，请查看安装日志: /root/install.log]"
-            fi
-            ;;
-        "default"|"1234567")
-            CYBERPANEL_ADMIN_PASSWORD="1234567"
-            ;;
-        *)
-            CYBERPANEL_ADMIN_PASSWORD="$ADMIN_PASSWORD"
-            ;;
-    esac
+    # 获取所有必要信息
+    get_public_ip
+    get_cyberpanel_admin_password
+    get_mysql_root_password
 
     # ------------------------------------------------
-    # 读取 WebAdmin (OpenLiteSpeed) 密码
-    # ------------------------------------------------
-    OLS_ADMIN_PASSWORD=""
-    OLS_CONF="/usr/local/lsws/admin/conf/htpasswd"
-
-    if [ -f "$OLS_CONF" ]; then
-        OLS_ADMIN_PASSWORD="[已设置，请通过 WebAdmin 界面修改]"
-    fi
-
-    # ------------------------------------------------
-    # 打印安装结果
+    # 打印结果
     # ------------------------------------------------
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║          CyberPanel 安装完成！                       ║${NC}"
+    echo -e "${GREEN}║           CyberPanel 安装完成！                      ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${CYAN}🖥  系统版本  :${NC}  Ubuntu ${UBUNTU_VERSION}"
@@ -412,28 +500,28 @@ except Exception as e:
     echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━ 访问地址 ━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo -e "  ${BLUE}📌 CyberPanel 管理面板 :${NC}"
-    echo -e "     👉 https://${SERVER_IP}:8090"
+    echo -e "     👉 https://${PUBLIC_IP}:8090"
     echo ""
     echo -e "  ${BLUE}📌 WebAdmin 控制台     :${NC}"
-    echo -e "     👉 https://${SERVER_IP}:7080"
+    echo -e "     👉 https://${PUBLIC_IP}:7080"
     echo ""
 
     echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━ CyberPanel 账号 ━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo -e "  ${BLUE}👤 管理员账号    :${NC} ${GREEN}admin${NC}"
+    echo -e "  ${BLUE}👤 管理员账号 :${NC} ${GREEN}admin${NC}"
     if [[ "$CYBERPANEL_ADMIN_PASSWORD" == "1234567" ]]; then
-        echo -e "  ${BLUE}🔑 管理员密码    :${NC} ${RED}${CYBERPANEL_ADMIN_PASSWORD}  ⚠️ 默认密码，请立即修改！${NC}"
+        echo -e "  ${BLUE}🔑 管理员密码 :${NC} ${RED}${CYBERPANEL_ADMIN_PASSWORD}  ⚠️  默认密码，请立即修改！${NC}"
     else
-        echo -e "  ${BLUE}🔑 管理员密码    :${NC} ${GREEN}${CYBERPANEL_ADMIN_PASSWORD}${NC}"
+        echo -e "  ${BLUE}🔑 管理员密码 :${NC} ${GREEN}${CYBERPANEL_ADMIN_PASSWORD}${NC}"
     fi
     echo ""
 
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━ 数据库账号 ━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━ 数据库账号 ━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo -e "  ${BLUE}🗄  数据库类型    :${NC} MariaDB"
-    echo -e "  ${BLUE}👤 数据库账号    :${NC} ${GREEN}root${NC}"
-    echo -e "  ${BLUE}🔑 数据库密码    :${NC} ${GREEN}${MYSQL_ROOT_PASSWORD}${NC}"
-    echo -e "  ${BLUE}🌐 连接地址      :${NC} 127.0.0.1:3306 (仅本地)"
+    echo -e "  ${BLUE}🗄  数据库类型 :${NC} MariaDB"
+    echo -e "  ${BLUE}👤 数据库账号 :${NC} ${GREEN}root${NC}"
+    echo -e "  ${BLUE}🔑 数据库密码 :${NC} ${GREEN}${MYSQL_ROOT_PASSWORD}${NC}"
+    echo -e "  ${BLUE}🌐 连接地址   :${NC} 127.0.0.1:3306 (仅本地)"
     echo ""
 
     echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━ 常用命令 ━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -442,13 +530,14 @@ except Exception as e:
     echo -e "  重启 面板服务    : ${CYAN}systemctl restart lscpd${NC}"
     echo -e "  重启 Web 服务器  : ${CYAN}systemctl restart lshttpd${NC}"
     echo -e "  重启 数据库      : ${CYAN}systemctl restart mariadb${NC}"
-    echo -e "  查看 MySQL 密码  : ${CYAN}cat /etc/cyberpanel/mysqlPassword${NC}"
+    echo -e "  手动查看DB密码   : ${CYAN}cat /etc/cyberpanel/mysqlPassword${NC}"
+    echo -e "  手动重置面板密码 : ${CYAN}cyberpanel changeAdminPass${NC}"
     echo ""
     echo -e "${GREEN}══════════════════════════════════════════════════════════${NC}"
     echo ""
 
     # ------------------------------------------------
-    # 保存所有信息到文件
+    # 保存安装信息到文件
     # ------------------------------------------------
     INFO_FILE="/root/cyberpanel_info.txt"
     {
@@ -456,30 +545,30 @@ except Exception as e:
         echo "  CyberPanel 安装信息 - 请妥善保管此文件！"
         echo "========================================================"
         echo ""
-        echo "  安装时间    : ${INSTALL_DATE}"
-        echo "  系统版本    : Ubuntu ${UBUNTU_VERSION}"
-        echo "  Web 服务器  : ${WEB_SERVER}"
+        echo "  安装时间       : ${INSTALL_DATE}"
+        echo "  系统版本       : Ubuntu ${UBUNTU_VERSION}"
+        echo "  Web 服务器     : ${WEB_SERVER}"
         echo ""
         echo "  ---- 访问地址 ----"
-        echo "  CyberPanel  : https://${SERVER_IP}:8090"
-        echo "  WebAdmin    : https://${SERVER_IP}:7080"
+        echo "  CyberPanel     : https://${PUBLIC_IP}:8090"
+        echo "  WebAdmin       : https://${PUBLIC_IP}:7080"
         echo ""
         echo "  ---- CyberPanel 账号 ----"
-        echo "  账号        : admin"
-        echo "  密码        : ${CYBERPANEL_ADMIN_PASSWORD}"
+        echo "  账号           : admin"
+        echo "  密码           : ${CYBERPANEL_ADMIN_PASSWORD}"
         echo ""
         echo "  ---- 数据库账号 ----"
-        echo "  数据库类型  : MariaDB"
-        echo "  账号        : root"
-        echo "  密码        : ${MYSQL_ROOT_PASSWORD}"
-        echo "  端口        : 3306"
+        echo "  数据库类型     : MariaDB"
+        echo "  账号           : root"
+        echo "  密码           : ${MYSQL_ROOT_PASSWORD}"
+        echo "  端口           : 3306"
         echo ""
         echo "========================================================"
     } > "$INFO_FILE"
     chmod 600 "$INFO_FILE"   # 仅 root 可读，保护密码安全
 
     log_info "📄 所有账号信息已保存至: ${YELLOW}${INFO_FILE}${NC}"
-    log_warn "⚠️  该文件权限已设为 600，仅 root 可读。请妥善保管！"
+    log_warn "⚠️  文件权限已设为 600，仅 root 可读，请妥善保管！"
 
     # ------------------------------------------------
     # 询问是否重启
@@ -500,22 +589,22 @@ main() {
     clear
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║    CyberPanel 全自动安装脚本   ║${NC}"
+    echo -e "${BLUE}║    CyberPanel 全自动安装脚本 - Ubuntu 专版   ║${NC}"
     echo -e "${BLUE}║      支持: Ubuntu 20.04 / 22.04 / 24.04      ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════════╝${NC}"
     echo ""
 
-    check_root
-    detect_ubuntu_version
-    check_resources
-    check_existing_install
-    configure_firewall
-    update_system
-    prepare_ubuntu_24       # 仅 Ubuntu 24.04 执行额外处理
-    build_answers
-    run_installer
-    post_install_config
-    show_result
+    check_root            # 第一步：检查 Root 权限
+    detect_ubuntu_version # 第二步：检测 Ubuntu 版本
+    check_resources       # 第三步：检查系统资源
+    check_existing_install # 第四步：检查是否已安装
+    configure_firewall    # 第五步：配置防火墙
+    update_system         # 第六步：更新系统
+    prepare_ubuntu_24     # 第七步：Ubuntu 24.04 额外处理
+    build_answers         # 第八步：构建自动应答
+    run_installer         # 第九步：执行安装
+    post_install_config   # 第十步：安装后配置
+    show_result           # 最终：打印结果
 }
 
 main "$@"
